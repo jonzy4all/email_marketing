@@ -1,0 +1,101 @@
+<main class="page">
+    <section id="loginView" class="panel login-panel">
+      <div class="brand-mark">EM</div>
+      <h1>Email Marketing</h1>
+      <p class="muted">Sign in to manage your email campaigns.</p>
+      <form id="loginForm">
+        <label for="loginEmail">Admin email</label>
+        <input id="loginEmail" type="email" autocomplete="username" required>
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" type="password" autocomplete="current-password" required>
+        <button type="submit">Sign in</button>
+        <p id="loginError" class="notice error" role="alert"></p>
+      </form>
+    </section>
+
+    <div id="appView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">CAMPAIGN WORKSPACE</div>
+          <h1>Email Marketing</h1>
+        </div>
+        <div class="account">
+          <span id="userEmail" class="muted"></span>
+          <button id="logoutButton" class="button-secondary button-small" type="button">Log out</button>
+        </div>
+      </header>
+
+      <section class="stats-grid" aria-label="Campaign statistics">
+        <article class="stat-card"><span>Total campaigns</span><strong id="totalCampaigns">0</strong></article>
+        <article class="stat-card"><span>Recipients sent</span><strong id="totalSent">0</strong></article>
+        <article class="stat-card"><span>Failed emails</span><strong id="totalFailed">0</strong></article>
+        <article class="stat-card"><span>Unsubscribed</span><strong id="totalUnsubscribed">0</strong></article>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div><div class="eyebrow">NEW CAMPAIGN</div><h2>Compose email</h2></div>
+          <span class="pill">10-second send interval</span>
+        </div>
+        <form id="campaignForm">
+          <div class="field-grid">
+            <div class="field">
+              <label for="from">From</label>
+              <input id="from" type="email" required autocomplete="email">
+              <small>Must match the authorized SMTP_FROM setting.</small>
+            </div>
+            <div class="field">
+              <label for="to">To <span class="muted">(optional with leads file)</span></label>
+              <input id="to" type="email" placeholder="recipient@example.com">
+            </div>
+          </div>
+          <div class="field">
+            <label for="subject">Subject</label>
+            <input id="subject" type="text" maxlength="200" required placeholder="Your email subject">
+          </div>
+          <div class="field">
+            <label for="message">Message</label>
+            <textarea id="message" rows="8" required placeholder="Write your email message here..."></textarea>
+            <small>Messages are sent as plain text. An unsubscribe link is appended automatically.</small>
+          </div>
+          <div class="upload-box">
+            <div class="upload-copy"><strong>Upload email leads</strong><span class="muted">TXT file, one address per line. Maximum 1 MB.</span></div>
+            <input id="leads" type="file" accept=".txt,text/plain">
+            <p id="leadInfo" class="muted">No leads file selected.</p>
+          </div>
+          <div class="consent-note"><strong>Before sending:</strong> Only contact people who have consented to receive your marketing. Unsubscribed addresses are automatically skipped.</div>
+          <div class="form-actions">
+            <button id="sendButton" type="submit">Start campaign</button>
+            <button id="clearButton" class="button-secondary" type="button">Clear form</button>
+          </div>
+          <p id="campaignNotice" class="notice" role="status"></p>
+        </form>
+      </section>
+
+      <section id="activePanel" class="panel" hidden>
+        <div class="section-heading"><div><div class="eyebrow">LIVE STATUS</div><h2>Campaign progress</h2></div><span id="campaignStatus" class="pill">Queued</span></div>
+        <p id="activeSubject" class="muted"></p>
+        <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+        <div class="progress-labels"><span id="progressCounts">Waiting for status…</span><span id="progressPercent">0%</span></div>
+        <div class="form-actions">
+          <button id="pauseButton" class="button-secondary" type="button">Pause</button>
+          <button id="resumeButton" class="button-secondary" type="button" hidden>Resume</button>
+          <button id="cancelButton" class="button-danger" type="button">Cancel campaign</button>
+        </div>
+        <h3>Recent recipient results</h3>
+        <div class="table-wrap"><table><thead><tr><th>Email</th><th>Status</th><th>Details</th></tr></thead><tbody id="recipientRows"><tr><td colspan="3">No results yet.</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><div><div class="eyebrow">PAST ACTIVITY</div><h2>Campaign history</h2></div><button id="refreshButton" class="button-secondary button-small" type="button">Refresh</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Subject</th><th>Status</th><th>Total</th><th>Sent</th><th>Failed</th><th>Created</th><th>Action</th></tr></thead><tbody id="historyRows"><tr><td colspan="7">No campaigns yet.</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><div><div class="eyebrow">SUPPRESSION LIST</div><h2>Unsubscribed addresses</h2></div><button id="refreshUnsubButton" class="button-secondary button-small" type="button">Refresh</button></div>
+        <p class="muted">These addresses are excluded from future campaigns.</p>
+        <div class="table-wrap"><table><thead><tr><th>Email</th><th>Reason</th><th>Date</th></tr></thead><tbody id="unsubRows"><tr><td colspan="3">Loading…</td></tr></tbody></table></div>
+      </section>
+    </div>
+    <footer>Use responsibly. Follow applicable email marketing and privacy laws.</footer>
+  </main>
