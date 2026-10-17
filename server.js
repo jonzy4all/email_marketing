@@ -11,6 +11,9 @@ const path = require("path");
 const crypto = require("crypto");
 
 const app = express();
+
+app.set('trust proxy', 1);
+
 const PORT = Number(process.env.PORT || 6000);
 const DELAY_MS = Math.max(10000, Number(process.env.EMAIL_DELAY_MS || 10000));
 const MAX_RECIPIENTS = Math.min(5000, Math.max(1, Number(process.env.MAX_RECIPIENTS_PER_CAMPAIGN || 5000)));
