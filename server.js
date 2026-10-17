@@ -444,9 +444,9 @@ async function start() {
     console.warn("SMTP is not fully configured; sign-in is available, but sending campaigns requires SMTP settings.");
   }
 
-  app.listen(PORT, () => {
-    console.log(`Email Marketing API running at http://localhost:${PORT}`);
-  });
+  app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Email Marketing API running on port ${PORT}`);
+});
 }
 
 
