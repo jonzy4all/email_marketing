@@ -35,14 +35,24 @@
       <section class="panel">
         <div class="section-heading">
           <div><div class="eyebrow">NEW CAMPAIGN</div><h2>Compose email</h2></div>
-          <span class="pill">10-second send interval</span>
+          <span class="pill">5-second send interval</span>
         </div>
         <form id="campaignForm">
           <div class="field-grid">
             <div class="field">
-              <label for="from">From</label>
+              <label for="fromName">From name</label>
+              <input id="fromName" type="text" maxlength="100" required placeholder="Your company or brand name" autocomplete="organization">
+              <small>The name recipients see beside your sender email address.</small>
+            </div>
+            <div class="field">
+              <label for="from">From email</label>
               <input id="from" type="email" required autocomplete="email">
-              <small>Must match the authorized SMTP_FROM setting.</small>
+              <small>Must match your verified EMAIL_FROM address in Render.</small>
+            </div>
+            <div class="field">
+              <label for="replyTo">Reply-To email <span class="muted">(optional)</span></label>
+              <input id="replyTo" type="email" placeholder="replies@example.com" autocomplete="email">
+              <small>Replies will go to this address instead of the From address.</small>
             </div>
             <div class="field">
               <label for="to">To <span class="muted">(optional with leads file)</span></label>

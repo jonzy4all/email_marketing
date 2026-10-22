@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { currentCampaignId: null, pollTimer: null, active: false, uploadedEmails: [] };
+const state = { currentCampaignId: null, pollTimer: null, active: false, uploadedEmails: [], config: {} };
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -58,7 +58,10 @@ async function showApp(email) {
   $("from").value = "";
   try {
     const config = await api("/api/config");
+    state.config = config;
     $("from").value = config.sender || "";
+    $("fromName").value = config.fromName || "Email Marketing";
+    $("replyTo").value = config.replyTo || "";
   } catch {}
   await refreshDashboard();
   await refreshUnsubscribes();
@@ -122,6 +125,9 @@ $("leads").addEventListener("change", async () => {
 
 $("clearButton").addEventListener("click", () => {
   $("campaignForm").reset();
+  $("from").value = state.config.sender || "";
+  $("fromName").value = state.config.fromName || "Email Marketing";
+  $("replyTo").value = state.config.replyTo || "";
   state.uploadedEmails = [];
   $("leadInfo").textContent = "No leads file selected.";
   showNotice("campaignNotice", "");
@@ -147,6 +153,8 @@ $("campaignForm").addEventListener("submit", async (event) => {
       method: "POST",
       body: JSON.stringify({
         from: $("from").value.trim(),
+        fromName: $("fromName").value.trim(),
+        replyTo: $("replyTo").value.trim(),
         subject: $("subject").value.trim(),
         message: $("message").value.trim(),
         recipients

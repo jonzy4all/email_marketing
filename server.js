@@ -2,7 +2,7 @@ require("dotenv").config();
 
 const express = require("express");
 const mongoose = require("mongoose");
-const nodemailer = require("nodemailer");
+// const nodemailer = require("nodemailer");
 const session = require("express-session");
 const MongoStore = require("connect-mongo");
 const bcrypt = require("bcryptjs");
@@ -43,6 +43,8 @@ const recipientSchema = new mongoose.Schema({
 const campaignSchema = new mongoose.Schema({
   owner: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   from: { type: String, required: true },
+  fromName: { type: String, default: "Email Marketing" },
+  replyTo: { type: String, default: "" },
   subject: { type: String, required: true },
   message: { type: String, required: true },
   recipients: [recipientSchema],
@@ -60,12 +62,11 @@ const suppressionSchema = new mongoose.Schema({
 });
 const Suppression = mongoose.model("Suppression", suppressionSchema);
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT || 587),
-  secure: String(process.env.SMTP_SECURE).toLowerCase() === "true",
-  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-});
+const brevoApiKey = String(process.env.BREVO_API_KEY || "").trim();
+const configuredFromEmail = normalizeEmail(process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_FROM || process.env.SMTP_FROM);
+
+const configuredFromName = String(process.env.EMAIL_FROM_NAME || "Email Marketing").trim().slice(0, 100);
+const configuredReplyTo = normalizeEmail(process.env.EMAIL_REPLY_TO);
 
 app.use(session({
   name: "email_marketing.sid",
@@ -117,7 +118,11 @@ function safeError(error) {
 }
 
 app.get("/api/config", (req, res) => {
-  res.json({ sender: normalizeEmail(process.env.SMTP_FROM) });
+  res.json({
+    sender: configuredFromEmail,
+    fromName: configuredFromName,
+    replyTo: configuredReplyTo
+  });
 });
 
 app.get("/api/session", async (req, res) => {
@@ -191,12 +196,24 @@ app.get("/api/unsubscribes", requireAuth, async (req, res) => {
 
 app.post("/api/campaigns", requireAuth, async (req, res) => {
   const from = normalizeEmail(req.body.from);
+  const fromName = String(req.body.fromName || configuredFromName).trim();
+  const replyTo = normalizeEmail(req.body.replyTo);
   const subject = String(req.body.subject || "").trim();
   const message = String(req.body.message || "").trim();
   let recipients = Array.isArray(req.body.recipients) ? req.body.recipients.map(normalizeEmail) : [];
 
-  if (!emailRegex.test(from) || from !== normalizeEmail(process.env.SMTP_FROM)) {
-    return res.status(400).json({ error: "From must match the configured SMTP_FROM address." });
+  if (!emailRegex.test(from) || from !== configuredFromEmail) {
+    return res.status(400).json({ error: "From email must match the configured EMAIL_FROM address." });
+  }
+  
+if (!fromName || fromName.length > 100 || /[\r\n]/.test(fromName)) {
+  return res.status(400).json({
+    error: "Enter a valid From name (maximum 100 characters)."
+  });
+}
+
+  if (replyTo && !emailRegex.test(replyTo)) {
+    return res.status(400).json({ error: "Enter a valid Reply-To email address or leave it blank." });
   }
   if (!subject || subject.length > 200 || !message || message.length > 100000) {
     return res.status(400).json({ error: "Subject is required (maximum 200 characters) and message is required." });
@@ -223,7 +240,7 @@ app.post("/api/campaigns", requireAuth, async (req, res) => {
   }
 
   const campaign = await Campaign.create({
-    owner: req.session.userId, from, subject, message, recipients: recipientDocs, status: "queued"
+    owner: req.session.userId, from, fromName, replyTo, subject, message, recipients: recipientDocs, status: "queued"
   });
 
   res.status(202).json({ campaignId: campaign._id, message: "Campaign queued." });
@@ -279,13 +296,39 @@ async function runCampaign(campaignId) {
       const unsubscribeUrl = `${baseUrl}/unsubscribe/${recipient.unsubscribeToken}`;
 
       try {
-        await transporter.sendMail({
-          from: campaign.from,
-          to: recipient.email,
+        if (!brevoApiKey) {
+          throw new Error("BREVO_API_KEY is not configured on the server.");
+        }
+        const brevoPayload = {
+          sender: { name: campaign.fromName || configuredFromName, email: campaign.from },
+          to: [{ email: recipient.email }],
           subject: campaign.subject,
-          text: `${campaign.message}`,
-          headers: { "List-Unsubscribe": `<${unsubscribeUrl}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }
+          textContent: String(campaign.message),
+          headers: {
+            "List-Unsubscribe": `<${unsubscribeUrl}>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
+          }
+        };
+        if (campaign.replyTo) brevoPayload.replyTo = { email: campaign.replyTo };
+        const brevoResponse = await fetch("https://api.brevo.com/v3/smtp/email", {
+          method: "POST",
+          headers: {
+            "accept": "application/json",
+            "api-key": brevoApiKey,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(brevoPayload),
+          signal: AbortSignal.timeout(Number(process.env.BREVO_API_TIMEOUT_MS || 20000))
         });
+        if (!brevoResponse.ok) {
+          const responseText = await brevoResponse.text();
+          let detail = responseText;
+          try {
+            const parsed = JSON.parse(responseText);
+            detail = parsed.message || parsed.code || responseText;
+          } catch {}
+          throw new Error(`Brevo API ${brevoResponse.status}: ${String(detail).slice(0, 250)}`);
+        }
         recipient.status = "sent";
         recipient.sentAt = new Date();
         recipient.error = "";
@@ -295,7 +338,7 @@ async function runCampaign(campaignId) {
       }
       await campaign.save();
 
-      // Ten seconds after each attempt before moving to the next recipient.
+      // Five seconds after each attempt before moving to the next recipient.
       if (i < campaign.recipients.length - 1) await wait(DELAY_MS);
     }
 
@@ -430,23 +473,17 @@ async function start() {
 
   await bootstrapAdmin();
 
-  // SMTP availability should not prevent administrators from signing in or viewing history.
-  // Campaign sends will report their own errors if SMTP is not configured/reachable.
-  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS && process.env.SMTP_FROM) {
-    console.log("Checking SMTP connection...");
-    try {
-      await transporter.verify();
-      console.log("SMTP connection successful.");
-    } catch (error) {
-      console.error("SMTP connection failed (sign-in remains available):", error.message);
-    }
-  } else {
-    console.warn("SMTP is not fully configured; sign-in is available, but sending campaigns requires SMTP settings.");
+  // Brevo uses HTTPS, avoiding outbound SMTP port restrictions on Render Free.
+  if (!brevoApiKey) {
+    console.warn("BREVO_API_KEY is missing; campaign sending will fail until it is configured.");
+  }
+  if (!configuredFromEmail || !emailRegex.test(configuredFromEmail)) {
+    console.warn("BREVO_SENDER_EMAIL (or EMAIL_FROM) is missing/invalid; campaign sends will be rejected.");
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Email Marketing API running on port ${PORT}`);
-});
+    console.log(`Email Marketing API running on port ${PORT}`);
+  });
 }
 
 
