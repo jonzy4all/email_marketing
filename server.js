@@ -109,54 +109,76 @@ function requireSameOrigin(req, res, next) {
 }
 app.use("/api", requireSameOrigin);
 
-// Brevo transactional delivery events. Configure this URL in Brevo:
-// https://YOUR_HOST/api/webhooks/brevo?token=YOUR_BREVO_WEBHOOK_SECRET
+// Brevo transactional delivery events. Brevo sends these events for messages
+// created through POST /v3/smtp/email. Configure the webhook URL in Brevo.
 app.post("/api/webhooks/brevo", async (req, res) => {
   const expectedSecret = String(process.env.BREVO_WEBHOOK_SECRET || "");
   const suppliedSecret = String(req.query.token || "");
-  if (!expectedSecret || !suppliedSecret || !crypto.timingSafeEqual(
-    Buffer.from(expectedSecret), Buffer.from(suppliedSecret)
-  )) {
+  const expected = Buffer.from(expectedSecret);
+  const supplied = Buffer.from(suppliedSecret);
+
+  // timingSafeEqual throws if the buffers have different lengths.
+  if (!expected.length || !supplied.length || expected.length !== supplied.length ||
+      !crypto.timingSafeEqual(expected, supplied)) {
     return res.status(401).json({ error: "Unauthorized webhook." });
   }
 
-  const event = req.body || {};
-  const messageId = String(event["message-id"] || "").trim();
+  const event = req.body && typeof req.body === "object" ? req.body : {};
+  const messageId = String(event["message-id"] || event.messageId || "").trim();
   const email = normalizeEmail(event.email);
-  const eventName = String(event.event || "").toLowerCase();
+  const eventName = String(event.event || "").trim().toLowerCase();
+
+  // A Brevo webhook test can send a minimal event. Acknowledge unknown/incomplete
+  // events so Brevo does not keep retrying a payload we cannot match.
   if (!messageId || !email || !eventName) {
-    return res.status(400).json({ error: "Missing Brevo event fields." });
+    return res.status(200).json({ received: true, ignored: true, reason: "Missing event identifiers." });
   }
 
+  const reason = String(event.reason || event.error || "").trim().slice(0, 350);
   const eventMap = {
-    delivered: { status: "delivered", error: "" },
-    hard_bounce: { status: "bounced", error: String(event.reason || "Permanent bounce").slice(0, 350) },
-    soft_bounce: { status: "deferred", error: String(event.reason || "Temporary bounce").slice(0, 350) },
-    deferred: { status: "deferred", error: String(event.reason || "Delivery deferred").slice(0, 350) },
-    blocked: { status: "blocked", error: "Brevo or the receiving server blocked this email." },
-    invalid_email: { status: "bounced", error: "Brevo reported an invalid email address." },
-    error: { status: "failed", error: "Brevo reported a delivery error." }
+    delivered: { status: "delivered", error: "", final: true },
+    hard_bounce: { status: "bounced", error: reason || "Permanent bounce", final: true },
+    soft_bounce: { status: "deferred", error: reason || "Temporary bounce", final: false },
+    deferred: { status: "deferred", error: reason || "Delivery deferred", final: false },
+    blocked: { status: "blocked", error: reason || "Brevo or the receiving server blocked this email.", final: true },
+    invalid_email: { status: "bounced", error: reason || "Brevo reported an invalid email address.", final: true },
+    invalid: { status: "bounced", error: reason || "Brevo reported an invalid email address.", final: true },
+    error: { status: "failed", error: reason || "Brevo reported a delivery error.", final: true }
   };
   const mapped = eventMap[eventName];
-  if (!mapped) return res.status(200).json({ received: true, ignored: true });
+  if (!mapped) return res.status(200).json({ received: true, ignored: true, event: eventName });
 
   try {
     const campaign = await Campaign.findOne({ "recipients.brevoMessageId": messageId });
     if (!campaign) return res.status(200).json({ received: true, matched: false });
 
     const recipient = campaign.recipients.find(r =>
-      r.brevoMessageId === messageId && r.email === email
+      String(r.brevoMessageId || "").trim() === messageId && normalizeEmail(r.email) === email
     );
     if (!recipient) return res.status(200).json({ received: true, matched: false });
 
-    // Avoid downgrading a final delivery result if events arrive out of order.
-    if (recipient.status !== "delivered" || mapped.status === "delivered") {
+    const eventSeconds = Number(event.ts_event || event.ts || 0);
+    const eventDate = Number.isFinite(eventSeconds) && eventSeconds > 0
+      ? new Date(eventSeconds * 1000)
+      : new Date();
+
+    const existingFinal = ["delivered", "bounced", "blocked"].includes(recipient.status);
+    const currentTime = recipient.deliveryAt ? new Date(recipient.deliveryAt).getTime() : 0;
+    const incomingTime = eventDate.getTime();
+
+    // Do not let an older event, or a transient deferred event, overwrite a
+    // final delivery/bounce/block outcome. Delivered is the strongest outcome.
+    const shouldApply = !existingFinal ||
+      (mapped.status === "delivered" && recipient.status !== "delivered" &&
+       (!currentTime || incomingTime >= currentTime));
+    if (shouldApply && (!recipient.deliveryAt || incomingTime >= currentTime || mapped.status === "delivered")) {
       recipient.status = mapped.status;
       recipient.error = mapped.error;
-      recipient.deliveryAt = new Date(Number(event.ts_event || event.ts || Date.now() / 1000) * 1000);
+      recipient.deliveryAt = eventDate;
       await campaign.save();
     }
-    return res.status(200).json({ received: true, matched: true });
+
+    return res.status(200).json({ received: true, matched: true, status: recipient.status });
   } catch (err) {
     console.error("Brevo webhook processing failed:", safeError(err));
     return res.status(500).json({ error: "Webhook processing failed." });
@@ -228,7 +250,9 @@ app.get("/api/dashboard", requireAuth, async (req, res) => {
     Suppression.countDocuments({})
   ]);
   const summaries = campaigns.map(c => {
-    const sent = c.recipients.filter(r => r.status === "sent").length;
+    const sent = c.recipients.filter(r => ["sent", "delivered", "deferred", "bounced", "blocked"].includes(r.status)).length;
+    const delivered = c.recipients.filter(r => r.status === "delivered").length;
+    const bounced = c.recipients.filter(r => ["bounced", "blocked"].includes(r.status)).length;
     const failed = c.recipients.filter(r => r.status === "failed").length;
     const skipped = c.recipients.filter(r => r.status === "skipped").length;
     return {
@@ -236,7 +260,7 @@ app.get("/api/dashboard", requireAuth, async (req, res) => {
       subject: c.subject,
       status: c.status,
       total: c.recipients.length,
-      sent, failed, skipped,
+      sent, delivered, bounced, failed, skipped,
       pending: c.recipients.filter(r => ["pending", "sending"].includes(r.status)).length,
       createdAt: c.createdAt,
       completedAt: c.completedAt
@@ -427,13 +451,18 @@ function ownedCampaign(req, res, next) {
 
 app.get("/api/campaigns/:id", requireAuth, ownedCampaign, (req, res) => {
   const c = req.campaign;
-  const sent = c.recipients.filter(r => r.status === "sent").length;
+  const sent = c.recipients.filter(r => ["sent", "delivered", "deferred", "bounced", "blocked"].includes(r.status)).length;
+  const delivered = c.recipients.filter(r => r.status === "delivered").length;
+  const bounced = c.recipients.filter(r => ["bounced", "blocked"].includes(r.status)).length;
   const failed = c.recipients.filter(r => r.status === "failed").length;
   const skipped = c.recipients.filter(r => r.status === "skipped").length;
   res.json({
-    id: c._id, status: c.status, total: c.recipients.length, sent, failed, skipped,
+    id: c._id, status: c.status, total: c.recipients.length, sent, delivered, bounced, failed, skipped,
     pending: c.recipients.filter(r => ["pending", "sending"].includes(r.status)).length,
-    recipients: c.recipients.map(r => ({ email: r.email, status: r.status, error: r.error, attempts: r.attempts }))
+    recipients: c.recipients.map(r => ({
+      email: r.email, status: r.status, error: r.error, attempts: r.attempts,
+      sentAt: r.sentAt, deliveryAt: r.deliveryAt
+    }))
   });
 });
 

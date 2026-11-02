@@ -50,3 +50,13 @@ Brevo webhook logs when diagnosing missed updates. "Delivered" means the receivi
 mail server accepted the message, not that it necessarily landed in the inbox.
 
 Only send campaigns to recipients who explicitly opted in to receive your emails.
+
+
+## Brevo delivery status tracking (updated)
+
+- Brevo webhook endpoint: `POST /api/webhooks/brevo?token=<BREVO_WEBHOOK_SECRET>`.
+- The endpoint validates the configured webhook secret without length-mismatch crashes, matches events using the Brevo message ID and recipient email, and updates delivery statuses.
+- Supported event mappings include delivered, hard bounce, soft bounce/deferred, blocked, invalid email, and error.
+- Recipient/campaign APIs and dashboard counters now include delivered and bounced/blocked outcomes; the campaign recipient panel briefly polls after sending completes to pick up delayed webhook events.
+- Set `BREVO_WEBHOOK_SECRET` in Render and configure a Brevo transactional webhook to the endpoint above. Keep the secret private.
+- `sent` indicates Brevo accepted the API request; `delivered` indicates Brevo reported successful delivery. This is not a guarantee that a person opened/read the message.

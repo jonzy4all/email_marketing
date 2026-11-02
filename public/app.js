@@ -1,5 +1,8 @@
 const $ = (id) => document.getElementById(id);
-const state = { currentCampaignId: null, pollTimer: null, active: false, uploadedEmails: [], config: {} };
+const state = {
+  currentCampaignId: null, pollTimer: null, active: false, uploadedEmails: [], config: {},
+  deliveryPollUntil: 0
+};
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -161,6 +164,7 @@ $("campaignForm").addEventListener("submit", async (event) => {
       })
     });
     state.currentCampaignId = data.campaignId;
+    state.deliveryPollUntil = 0;
     $("activePanel").hidden = false;
     $("activeSubject").textContent = $("subject").value.trim();
     showNotice("campaignNotice", "Campaign started. You can monitor progress below.", "success");
@@ -182,6 +186,20 @@ async function pollCampaign() {
       state.active = false;
       $("sendButton").disabled = false;
       await refreshDashboard();
+
+      // Brevo delivery webhooks may arrive after the sending worker completes.
+      // Keep refreshing recipient states briefly so final delivery/bounce results
+      // appear without requiring the user to reopen the campaign.
+      const waitingForDeliveryEvent = data.status === "completed" &&
+        data.recipients.some(r => ["sent", "deferred"].includes(r.status));
+      if (waitingForDeliveryEvent) {
+        if (!state.deliveryPollUntil) state.deliveryPollUntil = Date.now() + 5 * 60 * 1000;
+        if (Date.now() < state.deliveryPollUntil) {
+          state.pollTimer = setTimeout(pollCampaign, 2500);
+          return;
+        }
+      }
+      state.deliveryPollUntil = 0;
       return;
     }
   } catch (err) {
@@ -198,7 +216,7 @@ function renderCampaign(data) {
   const percent = data.total ? Math.round(done / data.total * 100) : 0;
   $("progressFill").style.width = `${percent}%`;
   $("progressPercent").textContent = `${percent}%`;
-  $("progressCounts").textContent = `Total ${data.total} · Sent ${data.sent} · Failed ${data.failed} · Skipped ${data.skipped} · Remaining ${data.pending}`;
+  $("progressCounts").textContent = `Total ${data.total} · Accepted ${data.sent} · Delivered ${data.delivered || 0} · Bounced ${data.bounced || 0} · Failed ${data.failed} · Skipped ${data.skipped} · Remaining ${data.pending}`;
   $("pauseButton").hidden = data.status !== "sending";
   $("resumeButton").hidden = data.status !== "paused";
   $("cancelButton").hidden = !["sending", "paused", "queued"].includes(data.status);
@@ -236,12 +254,14 @@ async function refreshDashboard() {
     const data = await api("/api/dashboard");
     $("totalCampaigns").textContent = data.campaigns.length;
     $("totalSent").textContent = data.campaigns.reduce((sum, c) => sum + c.sent, 0);
+    $("totalDelivered").textContent = data.campaigns.reduce((sum, c) => sum + (c.delivered || 0), 0);
+    $("totalBounced").textContent = data.campaigns.reduce((sum, c) => sum + (c.bounced || 0), 0);
     $("totalFailed").textContent = data.campaigns.reduce((sum, c) => sum + c.failed, 0);
     $("totalUnsubscribed").textContent = data.suppressedCount;
     const rows = $("historyRows");
     rows.replaceChildren();
     if (!data.campaigns.length) {
-      appendCell(rows.insertRow(), "No campaigns yet.").colSpan = 7;
+      appendCell(rows.insertRow(), "No campaigns yet.").colSpan = 9;
       return;
     }
     for (const campaign of data.campaigns) {
@@ -250,6 +270,8 @@ async function refreshDashboard() {
       appendCell(row, statusCell(campaign.status));
       appendCell(row, campaign.total);
       appendCell(row, campaign.sent);
+      appendCell(row, campaign.delivered || 0);
+      appendCell(row, campaign.bounced || 0);
       appendCell(row, campaign.failed);
       appendCell(row, dateText(campaign.createdAt));
       const actionCell = document.createElement("td");
@@ -258,6 +280,7 @@ async function refreshDashboard() {
       button.textContent = "View";
       button.addEventListener("click", async () => {
         state.currentCampaignId = String(campaign.id);
+        state.deliveryPollUntil = 0;
         state.active = ["queued", "sending", "paused"].includes(campaign.status);
         $("sendButton").disabled = state.active;
         $("activeSubject").textContent = campaign.subject;

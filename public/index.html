@@ -37,8 +37,10 @@
 
       <section class="stats-grid" aria-label="Campaign statistics">
         <article class="stat-card"><span>Total campaigns</span><strong id="totalCampaigns">0</strong></article>
-        <article class="stat-card"><span>Recipients sent</span><strong id="totalSent">0</strong></article>
-        <article class="stat-card"><span>Failed emails</span><strong id="totalFailed">0</strong></article>
+        <article class="stat-card"><span>Accepted by Brevo</span><strong id="totalSent">0</strong></article>
+        <article class="stat-card"><span>Delivered</span><strong id="totalDelivered">0</strong></article>
+        <article class="stat-card"><span>Bounced / blocked</span><strong id="totalBounced">0</strong></article>
+        <article class="stat-card"><span>Failed to send</span><strong id="totalFailed">0</strong></article>
         <article class="stat-card"><span>Unsubscribed</span><strong id="totalUnsubscribed">0</strong></article>
       </section>
 
@@ -108,7 +110,7 @@
 
       <section class="panel">
         <div class="section-heading"><div><div class="eyebrow">PAST ACTIVITY</div><h2>Campaign history</h2></div><button id="refreshButton" class="button-secondary button-small" type="button">Refresh</button></div>
-        <div class="table-wrap recipient-results-wrap"><table><thead><tr><th>Subject</th><th>Status</th><th>Total</th><th>Sent</th><th>Failed</th><th>Created</th><th>Action</th></tr></thead><tbody id="historyRows"><tr><td colspan="7">No campaigns yet.</td></tr></tbody></table></div>
+        <div class="table-wrap recipient-results-wrap"><table><thead><tr><th>Subject</th><th>Status</th><th>Total</th><th>Accepted</th><th>Delivered</th><th>Bounced</th><th>Failed</th><th>Created</th><th>Action</th></tr></thead><tbody id="historyRows"><tr><td colspan="9">No campaigns yet.</td></tr></tbody></table></div>
       </section>
 
       <section class="panel">
