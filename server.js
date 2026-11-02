@@ -33,9 +33,11 @@ const User = mongoose.model("User", userSchema);
 
 const recipientSchema = new mongoose.Schema({
   email: { type: String, required: true, lowercase: true, trim: true },
-  status: { type: String, enum: ["pending", "sending", "sent", "failed", "skipped"], default: "pending" },
+  status: { type: String, enum: ["pending", "sending", "sent", "delivered", "deferred", "bounced", "blocked", "failed", "skipped"], default: "pending" },
   error: { type: String, default: "" },
+  brevoMessageId: { type: String, default: "", index: true },
   sentAt: { type: Date, default: null },
+  deliveryAt: { type: Date, default: null },
   attempts: { type: Number, default: 0 },
   unsubscribeToken: { type: String, default: "" }
 }, { _id: true });
@@ -106,6 +108,60 @@ function requireSameOrigin(req, res, next) {
   next();
 }
 app.use("/api", requireSameOrigin);
+
+// Brevo transactional delivery events. Configure this URL in Brevo:
+// https://YOUR_HOST/api/webhooks/brevo?token=YOUR_BREVO_WEBHOOK_SECRET
+app.post("/api/webhooks/brevo", async (req, res) => {
+  const expectedSecret = String(process.env.BREVO_WEBHOOK_SECRET || "");
+  const suppliedSecret = String(req.query.token || "");
+  if (!expectedSecret || !suppliedSecret || !crypto.timingSafeEqual(
+    Buffer.from(expectedSecret), Buffer.from(suppliedSecret)
+  )) {
+    return res.status(401).json({ error: "Unauthorized webhook." });
+  }
+
+  const event = req.body || {};
+  const messageId = String(event["message-id"] || "").trim();
+  const email = normalizeEmail(event.email);
+  const eventName = String(event.event || "").toLowerCase();
+  if (!messageId || !email || !eventName) {
+    return res.status(400).json({ error: "Missing Brevo event fields." });
+  }
+
+  const eventMap = {
+    delivered: { status: "delivered", error: "" },
+    hard_bounce: { status: "bounced", error: String(event.reason || "Permanent bounce").slice(0, 350) },
+    soft_bounce: { status: "deferred", error: String(event.reason || "Temporary bounce").slice(0, 350) },
+    deferred: { status: "deferred", error: String(event.reason || "Delivery deferred").slice(0, 350) },
+    blocked: { status: "blocked", error: "Brevo or the receiving server blocked this email." },
+    invalid_email: { status: "bounced", error: "Brevo reported an invalid email address." },
+    error: { status: "failed", error: "Brevo reported a delivery error." }
+  };
+  const mapped = eventMap[eventName];
+  if (!mapped) return res.status(200).json({ received: true, ignored: true });
+
+  try {
+    const campaign = await Campaign.findOne({ "recipients.brevoMessageId": messageId });
+    if (!campaign) return res.status(200).json({ received: true, matched: false });
+
+    const recipient = campaign.recipients.find(r =>
+      r.brevoMessageId === messageId && r.email === email
+    );
+    if (!recipient) return res.status(200).json({ received: true, matched: false });
+
+    // Avoid downgrading a final delivery result if events arrive out of order.
+    if (recipient.status !== "delivered" || mapped.status === "delivered") {
+      recipient.status = mapped.status;
+      recipient.error = mapped.error;
+      recipient.deliveryAt = new Date(Number(event.ts_event || event.ts || Date.now() / 1000) * 1000);
+      await campaign.save();
+    }
+    return res.status(200).json({ received: true, matched: true });
+  } catch (err) {
+    console.error("Brevo webhook processing failed:", safeError(err));
+    return res.status(500).json({ error: "Webhook processing failed." });
+  }
+});
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
@@ -329,7 +385,9 @@ async function runCampaign(campaignId) {
           } catch {}
           throw new Error(`Brevo API ${brevoResponse.status}: ${String(detail).slice(0, 250)}`);
         }
+        const brevoResult = await brevoResponse.json().catch(() => ({}));
         recipient.status = "sent";
+        recipient.brevoMessageId = String(brevoResult.messageId || "").trim();
         recipient.sentAt = new Date();
         recipient.error = "";
       } catch (err) {

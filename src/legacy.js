@@ -208,7 +208,11 @@ function renderCampaign(data) {
     const row = document.createElement("tr");
     appendCell(row, recipient.email);
     appendCell(row, statusCell(recipient.status));
-    appendCell(row, recipient.error || (recipient.attempts ? `Attempts: ${recipient.attempts}` : "—"));
+    const detail = recipient.error ||
+      (recipient.status === "delivered" ? "Accepted by recipient mail server" :
+       recipient.status === "sent" ? "Accepted by Brevo; awaiting delivery event" :
+       recipient.attempts ? `Attempts: ${recipient.attempts}` : "—");
+    appendCell(row, detail);
     rows.appendChild(row);
   }
 }

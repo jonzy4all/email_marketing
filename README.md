@@ -26,3 +26,27 @@ For production, run `npm install`, `npm run build`, then `npm start`. Express se
 - Campaign history, recipient status tracking, pause/resume/cancel controls, unsubscribe links and suppression list remain in place.
 - The campaign worker runs inside the Node process. For production workloads, use a durable queue and robust monitoring.
 - Only send to people who have consented. Honor unsubscribes and applicable email/privacy laws.
+
+
+## Brevo delivery-status webhook
+
+This project sends through Brevo's transactional email API. The send API response
+means Brevo accepted the message; it does not itself confirm delivery. Delivery
+status is updated by Brevo webhook events.
+
+1. Set `BREVO_WEBHOOK_SECRET` in your production environment to a long random value.
+2. In Brevo, create a **Transactional** webhook with the URL:
+   `https://YOUR_DEPLOYED_HOST/api/webhooks/brevo?token=YOUR_BREVO_WEBHOOK_SECRET`
+   Replace both placeholders. Keep the token private.
+3. Subscribe the webhook to `Delivered`, `Hard Bounced`, `Soft Bounced`, `Deferred`,
+   `Blocked`, and `Error` events.
+4. Deploy this app. Recent recipient results will change from `Sent` (Brevo accepted)
+   to `Delivered`, `Bounced`, `Deferred`, `Blocked`, or `Failed` when Brevo reports
+   the event.
+
+The webhook correlates events by Brevo's `message-id` and recipient email. If an
+event arrives before a matching send record is saved, Brevo can retry it; check
+Brevo webhook logs when diagnosing missed updates. "Delivered" means the receiving
+mail server accepted the message, not that it necessarily landed in the inbox.
+
+Only send campaigns to recipients who explicitly opted in to receive your emails.
