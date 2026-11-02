@@ -58,6 +58,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .progress-fill { height: 100%; width: 0; background: #175cd3; border-radius: inherit; transition: width .25s ease; }
 .progress-labels { margin-top: 9px; color: #667085; font-size: 12px; }
 .table-wrap { overflow-x: auto; }
+.recipient-results-wrap { max-height: 420px; overflow: auto; border: 1px solid #eaecf0; border-radius: 8px; }
+.recipient-results-wrap table { min-width: 560px; }
+.recipient-results-wrap thead th { position: sticky; top: 0; z-index: 1; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
 th { color: #667085; font-weight: 600; background: #f9fafb; }
 th, td { padding: 12px 11px; border-bottom: 1px solid #eaecf0; vertical-align: top; }
