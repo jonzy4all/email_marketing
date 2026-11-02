@@ -58,7 +58,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .progress-fill { height: 100%; width: 0; background: #175cd3; border-radius: inherit; transition: width .25s ease; }
 .progress-labels { margin-top: 9px; color: #667085; font-size: 12px; }
 .table-wrap { overflow-x: auto; }
-.recipient-results-wrap { max-height: 320px; overflow: auto; overscroll-behavior: contain; scroll-behavior: smooth; border: 1px solid #eaecf0; border-radius: 9px; }
+.recipient-results-wrap { max-height: 520px; overflow: auto; overscroll-behavior: contain; scroll-behavior: smooth; border: 1px solid #eaecf0; border-radius: 9px; }
 .recipient-results-wrap table { min-width: 560px; }
 .recipient-results-wrap thead th { position: sticky; top: 0; z-index: 1; box-shadow: 0 1px 0 #eaecf0; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }

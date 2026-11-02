@@ -86,3 +86,7 @@ footer { text-align: center; color: #98a2b3; font-size: 11px; padding: 10px 0 20
   .account { max-width: 100%; justify-content: flex-start; }
   .form-actions button { flex: 1; }
 }
+
+.recipient-results-wrap { max-height: 520px; overflow: auto; overscroll-behavior: contain; scroll-behavior: smooth; border: 1px solid #eaecf0; border-radius: 9px; }
+.recipient-results-wrap table { min-width: 560px; }
+.recipient-results-wrap thead th { position: sticky; top: 0; z-index: 1; box-shadow: 0 1px 0 #eaecf0; }
