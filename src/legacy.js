@@ -204,7 +204,7 @@ function renderCampaign(data) {
   $("cancelButton").hidden = !["sending", "paused", "queued"].includes(data.status);
   const rows = $("recipientRows");
   rows.replaceChildren();
-  for (const recipient of data.recipients.slice(-100)) {
+  for (const recipient of data.recipients) {
     const row = document.createElement("tr");
     appendCell(row, recipient.email);
     appendCell(row, statusCell(recipient.status));
