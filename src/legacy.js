@@ -187,7 +187,7 @@ async function pollCampaign() {
       $("sendButton").disabled = false;
       await refreshDashboard();
 
-      // Brevo delivery webhooks may arrive after the sending worker completes.
+      // SES event notifications may arrive after the sending worker completes.
       // Keep refreshing recipient states briefly so final delivery/bounce results
       // appear without requiring the user to reopen the campaign.
       const waitingForDeliveryEvent = data.status === "completed" &&
@@ -216,7 +216,7 @@ function renderCampaign(data) {
   const percent = data.total ? Math.round(done / data.total * 100) : 0;
   $("progressFill").style.width = `${percent}%`;
   $("progressPercent").textContent = `${percent}%`;
-  $("progressCounts").textContent = `Total ${data.total} · Accepted ${data.sent} · Delivered ${data.delivered || 0} · Bounced ${data.bounced || 0} · Failed ${data.failed} · Skipped ${data.skipped} · Remaining ${data.pending}`;
+  $("progressCounts").textContent = `Total ${data.total} · Accepted ${data.sent} · Delivered ${data.delivered || 0} · Bounced ${data.bounced || 0} · Complaints ${data.complained || 0} · Rejected ${data.rejected || 0} · Failed ${data.failed} · Skipped ${data.skipped} · Remaining ${data.pending}`;
   $("pauseButton").hidden = data.status !== "sending";
   $("resumeButton").hidden = data.status !== "paused";
   $("cancelButton").hidden = !["sending", "paused", "queued"].includes(data.status);
@@ -228,7 +228,7 @@ function renderCampaign(data) {
     appendCell(row, statusCell(recipient.status));
     const detail = recipient.error ||
       (recipient.status === "delivered" ? "Accepted by recipient mail server" :
-       recipient.status === "sent" ? "Accepted by Brevo; awaiting delivery event" :
+       recipient.status === "sent" ? "Accepted by SES; awaiting delivery event" :
        recipient.attempts ? `Attempts: ${recipient.attempts}` : "—");
     appendCell(row, detail);
     rows.appendChild(row);
@@ -260,6 +260,7 @@ async function refreshDashboard() {
     $("totalSent").textContent = data.campaigns.reduce((sum, c) => sum + c.sent, 0);
     $("totalDelivered").textContent = data.campaigns.reduce((sum, c) => sum + (c.delivered || 0), 0);
     $("totalBounced").textContent = data.campaigns.reduce((sum, c) => sum + (c.bounced || 0), 0);
+    $("totalComplained").textContent = data.campaigns.reduce((sum, c) => sum + (c.complained || 0), 0);
     $("totalFailed").textContent = data.campaigns.reduce((sum, c) => sum + c.failed, 0);
     $("totalUnsubscribed").textContent = data.suppressedCount;
     const rows = $("historyRows");

@@ -9,6 +9,9 @@ const bcrypt = require("bcryptjs");
 const rateLimit = require("express-rate-limit");
 const path = require("path");
 const crypto = require("crypto");
+const { SESv2Client, SendEmailCommand } = require("@aws-sdk/client-sesv2");
+const MessageValidator = require("sns-validator");
+const { promisify } = require("util");
 
 const app = express();
 
@@ -33,8 +36,10 @@ const User = mongoose.model("User", userSchema);
 
 const recipientSchema = new mongoose.Schema({
   email: { type: String, required: true, lowercase: true, trim: true },
-  status: { type: String, enum: ["pending", "sending", "sent", "delivered", "deferred", "bounced", "blocked", "failed", "skipped"], default: "pending" },
+  status: { type: String, enum: ["pending", "sending", "sent", "delivered", "deferred", "bounced", "blocked", "complained", "rejected", "failed", "skipped"], default: "pending" },
   error: { type: String, default: "" },
+  providerMessageId: { type: String, default: "", index: true },
+  // Retained to read historical campaigns created before the SES migration.
   brevoMessageId: { type: String, default: "", index: true },
   sentAt: { type: Date, default: null },
   deliveryAt: { type: Date, default: null },
@@ -64,8 +69,13 @@ const suppressionSchema = new mongoose.Schema({
 });
 const Suppression = mongoose.model("Suppression", suppressionSchema);
 
-const brevoApiKey = String(process.env.BREVO_API_KEY || "").trim();
-const configuredFromEmail = normalizeEmail(process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_FROM || process.env.SMTP_FROM);
+const awsRegion = String(process.env.AWS_REGION || "eu-north-1").trim();
+const sesConfigurationSet = String(process.env.SES_CONFIGURATION_SET || "").trim();
+const sesClient = new SESv2Client({ region: awsRegion });
+const configuredFromEmail = normalizeEmail(process.env.EMAIL_FROM || process.env.SES_SENDER_EMAIL);
+const snsValidator = new MessageValidator();
+const validateSnsMessage = promisify(snsValidator.validate.bind(snsValidator));
+const expectedSnsTopicArn = String(process.env.SNS_TOPIC_ARN || "").trim();
 
 const configuredFromName = String(process.env.EMAIL_FROM_NAME || "Email Marketing").trim().slice(0, 100);
 const configuredReplyTo = normalizeEmail(process.env.EMAIL_REPLY_TO);
@@ -109,78 +119,92 @@ function requireSameOrigin(req, res, next) {
 }
 app.use("/api", requireSameOrigin);
 
-// Brevo transactional delivery events. Brevo sends these events for messages
-// created through POST /v3/smtp/email. Configure the webhook URL in Brevo.
-app.post("/api/webhooks/brevo", async (req, res) => {
-  const expectedSecret = String(process.env.BREVO_WEBHOOK_SECRET || "");
-  const suppliedSecret = String(req.query.token || "");
-  const expected = Buffer.from(expectedSecret);
-  const supplied = Buffer.from(suppliedSecret);
-
-  // timingSafeEqual throws if the buffers have different lengths.
-  if (!expected.length || !supplied.length || expected.length !== supplied.length ||
-      !crypto.timingSafeEqual(expected, supplied)) {
-    return res.status(401).json({ error: "Unauthorized webhook." });
+// Amazon SNS webhook: SES configuration-set events arrive inside SNS notifications.
+// SNS signs every message; verify the signature and expected topic before processing.
+app.post("/api/webhooks/ses", express.text({ type: ["text/plain", "application/json"], limit: "256kb" }), async (req, res) => {
+  let envelope;
+  try {
+    envelope = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    if (!envelope || typeof envelope !== "object") throw new Error("Invalid SNS envelope");
+    await validateSnsMessage(envelope);
+  } catch (err) {
+    return res.status(400).json({ error: "Invalid SNS message signature or payload." });
   }
 
-  const event = req.body && typeof req.body === "object" ? req.body : {};
-  const messageId = String(event["message-id"] || event.messageId || "").trim();
-  const email = normalizeEmail(event.email);
-  const eventName = String(event.event || "").trim().toLowerCase();
-
-  // A Brevo webhook test can send a minimal event. Acknowledge unknown/incomplete
-  // events so Brevo does not keep retrying a payload we cannot match.
-  if (!messageId || !email || !eventName) {
-    return res.status(200).json({ received: true, ignored: true, reason: "Missing event identifiers." });
+  if (!expectedSnsTopicArn || envelope.TopicArn !== expectedSnsTopicArn) {
+    return res.status(403).json({ error: "Unexpected SNS topic." });
   }
-
-  const reason = String(event.reason || event.error || "").trim().slice(0, 350);
-  const eventMap = {
-    delivered: { status: "delivered", error: "", final: true },
-    hard_bounce: { status: "bounced", error: reason || "Permanent bounce", final: true },
-    soft_bounce: { status: "deferred", error: reason || "Temporary bounce", final: false },
-    deferred: { status: "deferred", error: reason || "Delivery deferred", final: false },
-    blocked: { status: "blocked", error: reason || "Brevo or the receiving server blocked this email.", final: true },
-    invalid_email: { status: "bounced", error: reason || "Brevo reported an invalid email address.", final: true },
-    invalid: { status: "bounced", error: reason || "Brevo reported an invalid email address.", final: true },
-    error: { status: "failed", error: reason || "Brevo reported a delivery error.", final: true }
-  };
-  const mapped = eventMap[eventName];
-  if (!mapped) return res.status(200).json({ received: true, ignored: true, event: eventName });
 
   try {
-    const campaign = await Campaign.findOne({ "recipients.brevoMessageId": messageId });
-    if (!campaign) return res.status(200).json({ received: true, matched: false });
+    if (envelope.Type === "SubscriptionConfirmation") {
+      const subscribeUrl = new URL(String(envelope.SubscribeURL || ""));
+      if (subscribeUrl.protocol !== "https:" || !/^sns\.[a-z0-9-]+\.amazonaws\.com$/.test(subscribeUrl.hostname)) {
+        return res.status(400).json({ error: "Invalid SNS subscription confirmation URL." });
+      }
+      const confirmation = await fetch(subscribeUrl.toString(), { signal: AbortSignal.timeout(10000) });
+      if (!confirmation.ok) return res.status(502).json({ error: "SNS subscription confirmation failed." });
+      return res.status(200).json({ received: true, subscriptionConfirmed: true });
+    }
+    if (envelope.Type === "UnsubscribeConfirmation") {
+      return res.status(200).json({ received: true, unsubscribed: true });
+    }
+    if (envelope.Type !== "Notification") return res.status(200).json({ received: true, ignored: true });
 
-    const recipient = campaign.recipients.find(r =>
-      String(r.brevoMessageId || "").trim() === messageId && normalizeEmail(r.email) === email
-    );
-    if (!recipient) return res.status(200).json({ received: true, matched: false });
+    const event = typeof envelope.Message === "string" ? JSON.parse(envelope.Message) : envelope.Message;
+    const eventType = String(event?.eventType || event?.notificationType || "").toLowerCase();
+    const messageId = String(event?.mail?.messageId || "").trim();
+    if (!messageId) return res.status(200).json({ received: true, ignored: true, reason: "Missing SES message ID." });
 
-    const eventSeconds = Number(event.ts_event || event.ts || 0);
-    const eventDate = Number.isFinite(eventSeconds) && eventSeconds > 0
-      ? new Date(eventSeconds * 1000)
-      : new Date();
-
-    const existingFinal = ["delivered", "bounced", "blocked"].includes(recipient.status);
-    const currentTime = recipient.deliveryAt ? new Date(recipient.deliveryAt).getTime() : 0;
-    const incomingTime = eventDate.getTime();
-
-    // Do not let an older event, or a transient deferred event, overwrite a
-    // final delivery/bounce/block outcome. Delivered is the strongest outcome.
-    const shouldApply = !existingFinal ||
-      (mapped.status === "delivered" && recipient.status !== "delivered" &&
-       (!currentTime || incomingTime >= currentTime));
-    if (shouldApply && (!recipient.deliveryAt || incomingTime >= currentTime || mapped.status === "delivered")) {
-      recipient.status = mapped.status;
-      recipient.error = mapped.error;
-      recipient.deliveryAt = eventDate;
-      await campaign.save();
+    const recipientEvents = [];
+    const eventDate = event?.mail?.timestamp ? new Date(event.mail.timestamp) : new Date();
+    if (eventType === "delivery") {
+      for (const item of event.delivery?.recipients || []) recipientEvents.push({ email: item, status: "delivered", error: "" });
+    } else if (eventType === "bounce") {
+      for (const item of event.bounce?.bouncedRecipients || []) {
+        const transient = String(event.bounce?.bounceType || "").toLowerCase() === "transient";
+        recipientEvents.push({ email: item.emailAddress, status: transient ? "deferred" : "bounced", error: item.diagnosticCode || event.bounce?.bounceType || "Bounce" });
+      }
+    } else if (eventType === "complaint") {
+      for (const item of event.complaint?.complainedRecipients || []) recipientEvents.push({ email: item.emailAddress, status: "complained", error: "Recipient marked this email as spam." });
+    } else if (eventType === "deliverydelay") {
+      for (const item of event.deliveryDelay?.delayedRecipients || []) recipientEvents.push({ email: item.emailAddress, status: "deferred", error: item.diagnosticCode || event.deliveryDelay?.delayType || "Delivery delayed" });
+    } else if (eventType === "reject") {
+      for (const item of event.mail?.destination || []) recipientEvents.push({ email: item, status: "rejected", error: event.reject?.reason || "SES rejected the message." });
+    } else {
+      return res.status(200).json({ received: true, ignored: true, event: eventType });
     }
 
-    return res.status(200).json({ received: true, matched: true, status: recipient.status });
+    let updated = 0;
+    for (const item of recipientEvents) {
+      const email = normalizeEmail(item.email);
+      if (!email) continue;
+      const campaign = await Campaign.findOne({ $or: [
+        { "recipients.providerMessageId": messageId },
+        { "recipients.brevoMessageId": messageId }
+      ] });
+      if (!campaign) continue;
+      const recipient = campaign.recipients.find(r =>
+        (String(r.providerMessageId || r.brevoMessageId || "").trim() === messageId) && normalizeEmail(r.email) === email
+      );
+      if (!recipient) continue;
+
+      const finalStatuses = ["delivered", "bounced", "blocked", "complained", "rejected"];
+      const currentTime = recipient.deliveryAt ? new Date(recipient.deliveryAt).getTime() : 0;
+      const incomingTime = eventDate.getTime();
+      const alreadyFinal = finalStatuses.includes(recipient.status);
+      const shouldApply = !alreadyFinal ||
+        (item.status === "delivered" && recipient.status !== "delivered" && (!currentTime || incomingTime >= currentTime));
+      if (shouldApply && (!currentTime || incomingTime >= currentTime || item.status === "delivered")) {
+        recipient.status = item.status;
+        recipient.error = String(item.error || "").slice(0, 350);
+        recipient.deliveryAt = eventDate;
+        await campaign.save();
+        updated++;
+      }
+    }
+    return res.status(200).json({ received: true, event: eventType, updated });
   } catch (err) {
-    console.error("Brevo webhook processing failed:", safeError(err));
+    console.error("SES webhook processing failed:", safeError(err));
     return res.status(500).json({ error: "Webhook processing failed." });
   }
 });
@@ -250,9 +274,11 @@ app.get("/api/dashboard", requireAuth, async (req, res) => {
     Suppression.countDocuments({})
   ]);
   const summaries = campaigns.map(c => {
-    const sent = c.recipients.filter(r => ["sent", "delivered", "deferred", "bounced", "blocked"].includes(r.status)).length;
+    const sent = c.recipients.filter(r => ["sent", "delivered", "deferred", "bounced", "blocked", "complained", "rejected"].includes(r.status)).length;
     const delivered = c.recipients.filter(r => r.status === "delivered").length;
     const bounced = c.recipients.filter(r => ["bounced", "blocked"].includes(r.status)).length;
+    const complained = c.recipients.filter(r => r.status === "complained").length;
+    const rejected = c.recipients.filter(r => r.status === "rejected").length;
     const failed = c.recipients.filter(r => r.status === "failed").length;
     const skipped = c.recipients.filter(r => r.status === "skipped").length;
     return {
@@ -260,7 +286,7 @@ app.get("/api/dashboard", requireAuth, async (req, res) => {
       subject: c.subject,
       status: c.status,
       total: c.recipients.length,
-      sent, delivered, bounced, failed, skipped,
+      sent, delivered, bounced, complained, rejected, failed, skipped,
       pending: c.recipients.filter(r => ["pending", "sending"].includes(r.status)).length,
       createdAt: c.createdAt,
       completedAt: c.completedAt
@@ -376,42 +402,31 @@ async function runCampaign(campaignId) {
       const unsubscribeUrl = `${baseUrl}/unsubscribe/${recipient.unsubscribeToken}`;
 
       try {
-        if (!brevoApiKey) {
-          throw new Error("BREVO_API_KEY is not configured on the server.");
-        }
-        const brevoPayload = {
-          sender: { name: campaign.fromName || configuredFromName, email: campaign.from },
-          to: [{ email: recipient.email }],
-          subject: campaign.subject,
-          textContent: String(campaign.message),
-          headers: {
-            "List-Unsubscribe": `<${unsubscribeUrl}>`,
-            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
-          }
+        if (!configuredFromEmail) throw new Error("EMAIL_FROM is not configured on the server.");
+        const emailTags = [
+          { Name: "campaignId", Value: String(campaign._id) },
+          { Name: "recipientId", Value: String(recipient._id) }
+        ];
+        const sendInput = {
+          FromEmailAddress: `${campaign.fromName || configuredFromName} <${campaign.from}>`,
+          Destination: { ToAddresses: [recipient.email] },
+          Content: { Simple: {
+            Subject: { Data: campaign.subject, Charset: "UTF-8" },
+            Body: { Text: { Data: String(campaign.message), Charset: "UTF-8" } }
+          } },
+          EmailTags: emailTags,
+          Headers: [
+            { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
+            { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" }
+          ]
         };
-        if (campaign.replyTo) brevoPayload.replyTo = { email: campaign.replyTo };
-        const brevoResponse = await fetch("https://api.brevo.com/v3/smtp/email", {
-          method: "POST",
-          headers: {
-            "accept": "application/json",
-            "api-key": brevoApiKey,
-            "content-type": "application/json"
-          },
-          body: JSON.stringify(brevoPayload),
-          signal: AbortSignal.timeout(Number(process.env.BREVO_API_TIMEOUT_MS || 20000))
+        if (campaign.replyTo) sendInput.ReplyToAddresses = [campaign.replyTo];
+        if (sesConfigurationSet) sendInput.ConfigurationSetName = sesConfigurationSet;
+        const sesResult = await sesClient.send(new SendEmailCommand(sendInput), {
+          abortSignal: AbortSignal.timeout(Number(process.env.SES_API_TIMEOUT_MS || 20000))
         });
-        if (!brevoResponse.ok) {
-          const responseText = await brevoResponse.text();
-          let detail = responseText;
-          try {
-            const parsed = JSON.parse(responseText);
-            detail = parsed.message || parsed.code || responseText;
-          } catch {}
-          throw new Error(`Brevo API ${brevoResponse.status}: ${String(detail).slice(0, 250)}`);
-        }
-        const brevoResult = await brevoResponse.json().catch(() => ({}));
         recipient.status = "sent";
-        recipient.brevoMessageId = String(brevoResult.messageId || "").trim();
+        recipient.providerMessageId = String(sesResult.MessageId || "").trim();
         recipient.sentAt = new Date();
         recipient.error = "";
       } catch (err) {
@@ -451,13 +466,15 @@ function ownedCampaign(req, res, next) {
 
 app.get("/api/campaigns/:id", requireAuth, ownedCampaign, (req, res) => {
   const c = req.campaign;
-  const sent = c.recipients.filter(r => ["sent", "delivered", "deferred", "bounced", "blocked"].includes(r.status)).length;
+  const sent = c.recipients.filter(r => ["sent", "delivered", "deferred", "bounced", "blocked", "complained", "rejected"].includes(r.status)).length;
   const delivered = c.recipients.filter(r => r.status === "delivered").length;
   const bounced = c.recipients.filter(r => ["bounced", "blocked"].includes(r.status)).length;
+  const complained = c.recipients.filter(r => r.status === "complained").length;
+  const rejected = c.recipients.filter(r => r.status === "rejected").length;
   const failed = c.recipients.filter(r => r.status === "failed").length;
   const skipped = c.recipients.filter(r => r.status === "skipped").length;
   res.json({
-    id: c._id, status: c.status, total: c.recipients.length, sent, delivered, bounced, failed, skipped,
+    id: c._id, status: c.status, total: c.recipients.length, sent, delivered, bounced, complained, rejected, failed, skipped,
     pending: c.recipients.filter(r => ["pending", "sending"].includes(r.status)).length,
     recipients: c.recipients.map(r => ({
       email: r.email, status: r.status, error: r.error, attempts: r.attempts,
@@ -560,12 +577,15 @@ async function start() {
 
   await bootstrapAdmin();
 
-  // Brevo uses HTTPS, avoiding outbound SMTP port restrictions on Render Free.
-  if (!brevoApiKey) {
-    console.warn("BREVO_API_KEY is missing; campaign sending will fail until it is configured.");
-  }
+  // SES uses its HTTPS API; no outbound SMTP port is required.
   if (!configuredFromEmail || !emailRegex.test(configuredFromEmail)) {
-    console.warn("BREVO_SENDER_EMAIL (or EMAIL_FROM) is missing/invalid; campaign sends will be rejected.");
+    console.warn("EMAIL_FROM is missing/invalid; campaign sends will be rejected.");
+  }
+  if (!sesConfigurationSet) {
+    console.warn("SES_CONFIGURATION_SET is missing; SES event webhooks will not receive events for these sends.");
+  }
+  if (!expectedSnsTopicArn) {
+    console.warn("SNS_TOPIC_ARN is missing; the SES webhook endpoint will reject all SNS messages.");
   }
 
   app.listen(PORT, '0.0.0.0', () => {
