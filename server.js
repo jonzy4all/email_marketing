@@ -107,6 +107,9 @@ function requireAuth(req, res, next) {
   next();
 }
 function requireSameOrigin(req, res, next) {
+  // SNS is a server-to-server webhook and does not use browser same-origin rules.
+  // SNS authenticity is enforced separately by signature and TopicArn validation.
+  if (req.path === "/webhooks/ses") return next();
   const origin = req.get("origin");
   if (origin) {
     try {
@@ -122,30 +125,54 @@ app.use("/api", requireSameOrigin);
 // Amazon SNS webhook: SES configuration-set events arrive inside SNS notifications.
 // SNS signs every message; verify the signature and expected topic before processing.
 app.post("/api/webhooks/ses", express.text({ type: ["text/plain", "application/json"], limit: "256kb" }), async (req, res) => {
+  console.log("SNS webhook request received.");
   let envelope;
   try {
     envelope = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-    if (!envelope || typeof envelope !== "object") throw new Error("Invalid SNS envelope");
+    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+      throw new Error("Request body is not a valid SNS message object.");
+    }
     await validateSnsMessage(envelope);
   } catch (err) {
+    console.error("SNS signature/payload validation failed:", safeError(err));
     return res.status(400).json({ error: "Invalid SNS message signature or payload." });
   }
 
-  if (!expectedSnsTopicArn || envelope.TopicArn !== expectedSnsTopicArn) {
+  console.log(`SNS message validated. Type=${String(envelope.Type || "unknown")}; TopicArn=${String(envelope.TopicArn || "missing")}`);
+  if (!expectedSnsTopicArn) {
+    console.error("SNS webhook rejected: SNS_TOPIC_ARN is not configured.");
+    return res.status(503).json({ error: "SNS webhook is not configured." });
+  }
+  if (envelope.TopicArn !== expectedSnsTopicArn) {
+    console.error("SNS webhook rejected: TopicArn does not match SNS_TOPIC_ARN.");
     return res.status(403).json({ error: "Unexpected SNS topic." });
   }
 
   try {
     if (envelope.Type === "SubscriptionConfirmation") {
-      const subscribeUrl = new URL(String(envelope.SubscribeURL || ""));
-      if (subscribeUrl.protocol !== "https:" || !/^sns\.[a-z0-9-]+\.amazonaws\.com$/.test(subscribeUrl.hostname)) {
+      let subscribeUrl;
+      try {
+        subscribeUrl = new URL(String(envelope.SubscribeURL || ""));
+      } catch {
+        return res.status(400).json({ error: "Missing or invalid SNS subscription confirmation URL." });
+      }
+      const expectedSnsHost = `sns.${awsRegion}.amazonaws.com`;
+      if (subscribeUrl.protocol !== "https:" || subscribeUrl.hostname !== expectedSnsHost ||
+          subscribeUrl.searchParams.get("Action") !== "ConfirmSubscription") {
+        console.error(`SNS confirmation URL rejected. Host=${subscribeUrl.hostname}`);
         return res.status(400).json({ error: "Invalid SNS subscription confirmation URL." });
       }
-      const confirmation = await fetch(subscribeUrl.toString(), { signal: AbortSignal.timeout(10000) });
-      if (!confirmation.ok) return res.status(502).json({ error: "SNS subscription confirmation failed." });
+      console.log("SNS subscription confirmation received; requesting AWS confirmation.");
+      const confirmation = await fetch(subscribeUrl.toString(), { method: "GET", redirect: "error", signal: AbortSignal.timeout(15000) });
+      if (!confirmation.ok) {
+        console.error(`SNS subscription confirmation failed with HTTP ${confirmation.status}.`);
+        return res.status(502).json({ error: "SNS subscription confirmation failed." });
+      }
+      console.log("SNS subscription confirmation request succeeded.");
       return res.status(200).json({ received: true, subscriptionConfirmed: true });
     }
     if (envelope.Type === "UnsubscribeConfirmation") {
+      console.warn("SNS reports that this endpoint subscription was unsubscribed.");
       return res.status(200).json({ received: true, unsubscribed: true });
     }
     if (envelope.Type !== "Notification") return res.status(200).json({ received: true, ignored: true });
