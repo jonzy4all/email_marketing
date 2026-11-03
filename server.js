@@ -72,7 +72,9 @@ const Suppression = mongoose.model("Suppression", suppressionSchema);
 const awsRegion = String(process.env.AWS_REGION || "eu-north-1").trim();
 const sesConfigurationSet = String(process.env.SES_CONFIGURATION_SET || "").trim();
 const sesClient = new SESv2Client({ region: awsRegion });
-const configuredFromEmail = normalizeEmail(process.env.EMAIL_FROM || process.env.SES_SENDER_EMAIL);
+const configuredFromEmail = normalizeEmail(
+  process.env.EMAIL_FROM
+);
 const snsValidator = new MessageValidator();
 const validateSnsMessage = promisify(snsValidator.validate.bind(snsValidator));
 const expectedSnsTopicArn = String(process.env.SNS_TOPIC_ARN || "").trim();
@@ -435,20 +437,35 @@ async function runCampaign(campaignId) {
           { Name: "recipientId", Value: String(recipient._id) }
         ];
         const sendInput = {
-          FromEmailAddress: `${campaign.fromName || configuredFromName} <${campaign.from}>`,
-          Destination: { ToAddresses: [recipient.email] },
-          Content: { Simple: {
-            Subject: { Data: campaign.subject, Charset: "UTF-8" },
-            Body: { Text: { Data: String(campaign.message), Charset: "UTF-8" } }
-          } },
-          EmailTags: emailTags,
-          Headers: [
-            { Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
-            { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" }
-          ]
-        };
+  FromEmailAddress: `${configuredFromName} <${configuredFromEmail}>`,
+
+  Destination: {
+    ToAddresses: [recipient.email]
+  },
+
+  Content: {
+    Simple: {
+      Subject: {
+        Data: campaign.subject,
+        Charset: "UTF-8"
+      },
+      Body: {
+        Text: {
+          Data: String(campaign.message),
+          Charset: "UTF-8"
+        }
+      }
+    }
+  }
+};
         if (campaign.replyTo) sendInput.ReplyToAddresses = [campaign.replyTo];
         if (sesConfigurationSet) sendInput.ConfigurationSetName = sesConfigurationSet;
+        console.log("SES SENDING DIAGNOSTICS:", {
+  sender: sendInput.FromEmailAddress,
+  recipients: sendInput.Destination.ToAddresses,
+  region: awsRegion
+});
+
         const sesResult = await sesClient.send(new SendEmailCommand(sendInput), {
           abortSignal: AbortSignal.timeout(Number(process.env.SES_API_TIMEOUT_MS || 20000))
         });
