@@ -58,9 +58,63 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .progress-fill { height: 100%; width: 0; background: #175cd3; border-radius: inherit; transition: width .25s ease; }
 .progress-labels { margin-top: 9px; color: #667085; font-size: 12px; }
 .table-wrap { overflow-x: auto; }
-.recipient-results-wrap { max-height: 520px; overflow: auto; overscroll-behavior: contain; scroll-behavior: smooth; border: 1px solid #eaecf0; border-radius: 9px; }
-.recipient-results-wrap table { min-width: 560px; }
-.recipient-results-wrap thead th { position: sticky; top: 0; z-index: 1; box-shadow: 0 1px 0 #eaecf0; }
+.recipient-results-wrap {
+  max-height: 520px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  border: 1px solid #eaecf0;
+  border-radius: 9px;
+}
+
+/* Allow columns to size naturally based on their content */
+.recipient-results-wrap table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+}
+
+/* Keep columns as compact as possible */
+.recipient-results-wrap th,
+.recipient-results-wrap td {
+  width: max-content;
+  padding: 12px;
+  vertical-align: top;
+}
+
+/* Email: expand to content, but stop at 200px */
+.recipient-results-wrap th:nth-child(1),
+.recipient-results-wrap td:nth-child(1) {
+  max-width: 200px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Status: compact, with a maximum width */
+.recipient-results-wrap th:nth-child(2),
+.recipient-results-wrap td:nth-child(2) {
+  max-width: 100px;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+/* Details: maximum width, then wrap to additional lines */
+.recipient-results-wrap th:nth-child(3),
+.recipient-results-wrap td:nth-child(3) {
+  max-width: 440px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+/* Sticky header */
+.recipient-results-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f9fafb;
+  box-shadow: 0 1px 0 #eaecf0;
+}
 table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
 th { color: #667085; font-weight: 600; background: #f9fafb; }
 th, td { padding: 12px 11px; border-bottom: 1px solid #eaecf0; vertical-align: top; }

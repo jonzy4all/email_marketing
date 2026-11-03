@@ -87,9 +87,63 @@ footer { text-align: center; color: #98a2b3; font-size: 11px; padding: 10px 0 20
   .form-actions button { flex: 1; }
 }
 
-.recipient-results-wrap { max-height: 520px; overflow: auto; overscroll-behavior: contain; scroll-behavior: smooth; border: 1px solid #eaecf0; border-radius: 9px; }
-.recipient-results-wrap table { min-width: 560px; }
-.recipient-results-wrap thead th { position: sticky; top: 0; z-index: 1; box-shadow: 0 1px 0 #eaecf0; }
+.recipient-results-wrap {
+  max-height: 520px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  border: 1px solid #eaecf0;
+  border-radius: 9px;
+}
+
+/* Allow columns to size naturally based on their content */
+.recipient-results-wrap table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+}
+
+/* Keep columns as compact as possible */
+.recipient-results-wrap th,
+.recipient-results-wrap td {
+  width: max-content;
+  padding: 12px;
+  vertical-align: top;
+}
+
+/* Email: expand to content, but stop at 200px */
+.recipient-results-wrap th:nth-child(1),
+.recipient-results-wrap td:nth-child(1) {
+  max-width: 200px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Status: compact, with a maximum width */
+.recipient-results-wrap th:nth-child(2),
+.recipient-results-wrap td:nth-child(2) {
+  max-width: 100px;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+/* Details: maximum width, then wrap to additional lines */
+.recipient-results-wrap th:nth-child(3),
+.recipient-results-wrap td:nth-child(3) {
+  max-width: 440px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+/* Sticky header */
+.recipient-results-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f9fafb;
+  box-shadow: 0 1px 0 #eaecf0;
+}
 /* Brevo delivery event statuses in Recent recipient results */
 .status-delivered { color: #067647; font-weight: 600; }
 .status-deferred { color: #b54708; }
