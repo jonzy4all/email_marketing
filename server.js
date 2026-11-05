@@ -107,37 +107,56 @@ function requireSameOrigin(req, res, next) {
   }
   next();
 }
-app.use("/api", requireSameOrigin);
-
-// Brevo transactional delivery events. Brevo sends these events for messages
-// created through POST /v3/smtp/email. Configure the webhook URL in Brevo.
+// Brevo transactional delivery events. Configure this exact route in Brevo.
+// The shared query token is an application-level safeguard; it is not a Brevo API key.
 app.post("/api/webhooks/brevo", async (req, res) => {
   const expectedSecret = String(process.env.BREVO_WEBHOOK_SECRET || "");
   const suppliedSecret = String(req.query.token || "");
   const expected = Buffer.from(expectedSecret);
   const supplied = Buffer.from(suppliedSecret);
 
-  // timingSafeEqual throws if the buffers have different lengths.
   if (!expected.length || !supplied.length || expected.length !== supplied.length ||
       !crypto.timingSafeEqual(expected, supplied)) {
+    console.warn("Brevo webhook rejected: missing or invalid token.");
     return res.status(401).json({ error: "Unauthorized webhook." });
   }
 
   const event = req.body && typeof req.body === "object" ? req.body : {};
   const messageId = String(event["message-id"] || event.messageId || "").trim();
   const email = normalizeEmail(event.email);
-  const eventName = String(event.event || "").trim().toLowerCase();
+  // Brevo event names include camelCase values such as hardBounce/softBounce.
+  // Lowercasing them gives hardbounce/softbounce, so aliases are included below.
+  const eventName = String(event.event || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const reason = String(event.reason || event.error || "").trim().slice(0, 350);
 
-  // A Brevo webhook test can send a minimal event. Acknowledge unknown/incomplete
-  // events so Brevo does not keep retrying a payload we cannot match.
-  if (!messageId || !email || !eventName) {
-    return res.status(200).json({ received: true, ignored: true, reason: "Missing event identifiers." });
+  if (!email || !eventName) {
+    console.info("Brevo webhook received an incomplete event.", { event: eventName || "unknown" });
+    return res.status(200).json({ received: true, ignored: true, reason: "Missing email or event." });
   }
 
-  const reason = String(event.reason || event.error || "").trim().slice(0, 350);
+  // Complaints and unsubscribe events may not include a message ID. Suppress
+  // these addresses even when there is no campaign recipient to match.
+  const suppressionEvents = ["spam", "complaint", "unsubscribe", "unsubscribed"];
+  if (suppressionEvents.includes(eventName)) {
+    try {
+      await Suppression.updateOne(
+        { email },
+        { $set: { reason: eventName === "spam" || eventName === "complaint" ? "spam_complaint" : "unsubscribed" } },
+        { upsert: true }
+      );
+      console.info("Brevo suppression event recorded.", { event: eventName, email });
+      return res.status(200).json({ received: true, suppressed: true });
+    } catch (err) {
+      console.error("Brevo suppression webhook failed:", safeError(err));
+      return res.status(500).json({ error: "Webhook processing failed." });
+    }
+  }
+
   const eventMap = {
     delivered: { status: "delivered", error: "", final: true },
+    hardbounce: { status: "bounced", error: reason || "Permanent bounce", final: true },
     hard_bounce: { status: "bounced", error: reason || "Permanent bounce", final: true },
+    softbounce: { status: "deferred", error: reason || "Temporary bounce", final: false },
     soft_bounce: { status: "deferred", error: reason || "Temporary bounce", final: false },
     deferred: { status: "deferred", error: reason || "Delivery deferred", final: false },
     blocked: { status: "blocked", error: reason || "Brevo or the receiving server blocked this email.", final: true },
@@ -146,11 +165,21 @@ app.post("/api/webhooks/brevo", async (req, res) => {
     error: { status: "failed", error: reason || "Brevo reported a delivery error.", final: true }
   };
   const mapped = eventMap[eventName];
-  if (!mapped) return res.status(200).json({ received: true, ignored: true, event: eventName });
+  if (!mapped) {
+    console.info("Brevo webhook event acknowledged but not used for delivery status.", { event: eventName });
+    return res.status(200).json({ received: true, ignored: true, event: eventName });
+  }
+  if (!messageId) {
+    console.info("Brevo delivery event has no message ID.", { event: eventName, email });
+    return res.status(200).json({ received: true, matched: false, reason: "Missing message ID." });
+  }
 
   try {
     const campaign = await Campaign.findOne({ "recipients.brevoMessageId": messageId });
-    if (!campaign) return res.status(200).json({ received: true, matched: false });
+    if (!campaign) {
+      console.warn("Brevo event did not match a campaign message ID.", { event: eventName, messageId });
+      return res.status(200).json({ received: true, matched: false });
+    }
 
     const recipient = campaign.recipients.find(r =>
       String(r.brevoMessageId || "").trim() === messageId && normalizeEmail(r.email) === email
@@ -161,13 +190,12 @@ app.post("/api/webhooks/brevo", async (req, res) => {
     const eventDate = Number.isFinite(eventSeconds) && eventSeconds > 0
       ? new Date(eventSeconds * 1000)
       : new Date();
-
     const existingFinal = ["delivered", "bounced", "blocked"].includes(recipient.status);
     const currentTime = recipient.deliveryAt ? new Date(recipient.deliveryAt).getTime() : 0;
     const incomingTime = eventDate.getTime();
 
-    // Do not let an older event, or a transient deferred event, overwrite a
-    // final delivery/bounce/block outcome. Delivered is the strongest outcome.
+    // A later delivered event can supersede a prior transient/final negative
+    // state; older events must not overwrite a newer outcome.
     const shouldApply = !existingFinal ||
       (mapped.status === "delivered" && recipient.status !== "delivered" &&
        (!currentTime || incomingTime >= currentTime));
@@ -178,12 +206,17 @@ app.post("/api/webhooks/brevo", async (req, res) => {
       await campaign.save();
     }
 
+    console.info("Brevo delivery event processed.", { event: eventName, email, status: recipient.status });
     return res.status(200).json({ received: true, matched: true, status: recipient.status });
   } catch (err) {
     console.error("Brevo webhook processing failed:", safeError(err));
     return res.status(500).json({ error: "Webhook processing failed." });
   }
 });
+
+// Apply same-origin protection to browser-facing API routes. The Brevo webhook
+// is registered above and is protected by its dedicated shared token instead.
+app.use("/api", requireSameOrigin);
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
@@ -566,6 +599,9 @@ async function start() {
   }
   if (!configuredFromEmail || !emailRegex.test(configuredFromEmail)) {
     console.warn("BREVO_SENDER_EMAIL (or EMAIL_FROM) is missing/invalid; campaign sends will be rejected.");
+  }
+  if (!process.env.BREVO_WEBHOOK_SECRET || process.env.BREVO_WEBHOOK_SECRET.length < 32) {
+    console.warn("BREVO_WEBHOOK_SECRET is missing or shorter than 32 characters; Brevo webhook requests will be rejected or inadequately protected.");
   }
 
   app.listen(PORT, '0.0.0.0', () => {

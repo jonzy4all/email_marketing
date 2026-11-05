@@ -2,7 +2,7 @@
   "name": "email-marketing-app",
   "version": "2.0.0",
   "private": true,
-  "description": "Email campaign manager with a Vite + React frontend and Express + MongoDB backend using Amazon SES",
+  "description": "Email campaign manager with a Vite + React frontend and Express + MongoDB backend using Brevo transactional email",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
