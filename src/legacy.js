@@ -187,7 +187,7 @@ async function pollCampaign() {
       $("sendButton").disabled = false;
       await refreshDashboard();
 
-      // SES event notifications may arrive after the sending worker completes.
+      // Brevo event notifications may arrive after the sending worker completes.
       // Keep refreshing recipient states briefly so final delivery/bounce results
       // appear without requiring the user to reopen the campaign.
       const waitingForDeliveryEvent = data.status === "completed" &&
@@ -228,7 +228,7 @@ function renderCampaign(data) {
     appendCell(row, statusCell(recipient.status));
     const detail = recipient.error ||
       (recipient.status === "delivered" ? "Accepted by recipient mail server" :
-       recipient.status === "sent" ? "Accepted by SES; awaiting delivery event" :
+       recipient.status === "sent" ? "Accepted by Brevo; awaiting delivery event" :
        recipient.attempts ? `Attempts: ${recipient.attempts}` : "—");
     appendCell(row, detail);
     rows.appendChild(row);

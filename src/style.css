@@ -144,7 +144,7 @@ footer { text-align: center; color: #98a2b3; font-size: 11px; padding: 10px 0 20
   background: #f9fafb;
   box-shadow: 0 1px 0 #eaecf0;
 }
-/* SES delivery event statuses in Recent recipient results */
+/* Brevo delivery event statuses in Recent recipient results */
 .status-delivered { color: #067647; font-weight: 600; }
 .status-deferred { color: #b54708; }
 .status-bounced, .status-blocked { color: #b42318; font-weight: 600; }
