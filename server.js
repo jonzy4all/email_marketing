@@ -15,7 +15,7 @@ const app = express();
 app.set('trust proxy', 1);
 
 const PORT = Number(process.env.PORT || 6000);
-const DELAY_MS = Math.max(10000, Number(process.env.EMAIL_DELAY_MS || 10000));
+const DELAY_MS = Math.max(10000, Number(process.env.EMAIL_DELAY_MS || 5000));
 const MAX_RECIPIENTS = Math.min(5000, Math.max(1, Number(process.env.MAX_RECIPIENTS_PER_CAMPAIGN || 5000)));
 const MAX_LEADS_BYTES = Number(process.env.MAX_LEADS_FILE_BYTES || 1048576);
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
