@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const state = {
   currentCampaignId: null, pollTimer: null, active: false, uploadedEmails: [], config: {},
-  deliveryPollUntil: 0
+  deliveryPollUntil: 0, recipientResults: []
 };
 
 async function api(url, options = {}) {
@@ -220,9 +220,23 @@ function renderCampaign(data) {
   $("pauseButton").hidden = data.status !== "sending";
   $("resumeButton").hidden = data.status !== "paused";
   $("cancelButton").hidden = !["sending", "paused", "queued"].includes(data.status);
+  state.recipientResults = Array.isArray(data.recipients) ? data.recipients : [];
+  renderRecipientResults();
+}
+
+function renderRecipientResults() {
   const rows = $("recipientRows");
+  const filter = $("recipientStatusFilter")?.value || "all";
   rows.replaceChildren();
-  for (const recipient of data.recipients) {
+  const recipients = state.recipientResults.filter(recipient =>
+    filter === "all" || String(recipient.status || "").toLowerCase() === filter
+  );
+  if (!recipients.length) {
+    const row = rows.insertRow();
+    appendCell(row, filter === "all" ? "No results yet." : `No recipients with status: ${filter}.`).colSpan = 3;
+    return;
+  }
+  for (const recipient of recipients) {
     const row = document.createElement("tr");
     appendCell(row, recipient.email);
     appendCell(row, statusCell(recipient.status));
@@ -230,6 +244,8 @@ function renderCampaign(data) {
     rows.appendChild(row);
   }
 }
+
+$("recipientStatusFilter")?.addEventListener("change", renderRecipientResults);
 
 $("pauseButton").addEventListener("click", () => campaignAction("pause"));
 $("resumeButton").addEventListener("click", () => campaignAction("resume"));

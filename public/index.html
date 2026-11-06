@@ -105,7 +105,23 @@
           <button id="resumeButton" class="button-secondary" type="button" hidden>Resume</button>
           <button id="cancelButton" class="button-danger" type="button">Cancel campaign</button>
         </div>
-        <h3>Recent recipient results</h3>
+        <div class="recipient-results-heading">
+          <h3>Recent recipient results</h3>
+          <label class="status-filter-label" for="recipientStatusFilter">Status
+            <select id="recipientStatusFilter" aria-label="Filter recipient results by status">
+              <option value="all">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="sending">Sending</option>
+              <option value="sent">Sent</option>
+              <option value="delivered">Delivered</option>
+              <option value="deferred">Deferred</option>
+              <option value="bounced">Bounced</option>
+              <option value="blocked">Blocked</option>
+              <option value="failed">Failed</option>
+              <option value="skipped">Skipped</option>
+            </select>
+          </label>
+        </div>
         <div class="table-wrap recipient-results-wrap"><table><thead><tr><th>Email</th><th>Status</th><th>Details</th></tr></thead><tbody id="recipientRows"><tr><td colspan="3">No results yet.</td></tr></tbody></table></div>
       </section>
 
