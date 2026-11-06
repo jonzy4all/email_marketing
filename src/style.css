@@ -155,3 +155,5 @@ footer { text-align: center; color: #98a2b3; font-size: 11px; padding: 10px 0 20
 .status-delivered { color: #067647; font-weight: 600; }
 .status-deferred { color: #b54708; }
 .status-bounced, .status-blocked { color: #b42318; font-weight: 600; }
+
+.recipient-results-heading #downloadRecipientResults { margin: 16px 0 12px; white-space: nowrap; }

@@ -224,13 +224,57 @@ function renderCampaign(data) {
   renderRecipientResults();
 }
 
+function recipientResultsForFilter() {
+  const filter = $("recipientStatusFilter")?.value || "all";
+  return state.recipientResults.filter(recipient =>
+    filter === "all" || String(recipient.status || "").toLowerCase() === filter
+  );
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadRecipientResults() {
+  const filter = $("recipientStatusFilter")?.value || "all";
+  const recipients = recipientResultsForFilter();
+  if (!recipients.length) {
+    alert(`There are no recipient results for ${filter === "all" ? "all statuses" : filter}.`);
+    return;
+  }
+  const rows = [["Email", "Status", "Details", "Attempts"], ...recipients.map(recipient => {
+    const detail = recipient.error ||
+      (recipient.status === "delivered" ? "Accepted by recipient mail server" :
+       recipient.status === "sent" ? "Accepted by Brevo; awaiting delivery event" :
+       recipient.attempts ? `Attempts: ${recipient.attempts}` : "—");
+    return [recipient.email, recipient.status, detail, recipient.attempts ?? ""];
+  })];
+  const csv = rows.map(row => row.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const campaignSuffix = state.currentCampaignId ? `-${state.currentCampaignId}` : "";
+  link.href = url;
+  link.download = `recipient-results-${filter}${campaignSuffix}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function updateRecipientDownloadButton() {
+  const filter = $("recipientStatusFilter")?.value || "all";
+  const button = $("downloadRecipientResults");
+  if (button) button.textContent = `Download ${filter === "all" ? "all statuses" : filter} CSV`;
+}
+
 function renderRecipientResults() {
   const rows = $("recipientRows");
   const filter = $("recipientStatusFilter")?.value || "all";
   rows.replaceChildren();
-  const recipients = state.recipientResults.filter(recipient =>
-    filter === "all" || String(recipient.status || "").toLowerCase() === filter
-  );
+  const recipients = recipientResultsForFilter();
+  updateRecipientDownloadButton();
   if (!recipients.length) {
     const row = rows.insertRow();
     appendCell(row, filter === "all" ? "No results yet." : `No recipients with status: ${filter}.`).colSpan = 3;
@@ -250,6 +294,7 @@ function renderRecipientResults() {
 }
 
 $("recipientStatusFilter")?.addEventListener("change", renderRecipientResults);
+$("downloadRecipientResults")?.addEventListener("click", downloadRecipientResults);
 
 $("pauseButton").addEventListener("click", () => campaignAction("pause"));
 $("resumeButton").addEventListener("click", () => campaignAction("resume"));

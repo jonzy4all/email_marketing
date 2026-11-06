@@ -150,3 +150,5 @@ footer { text-align: center; color: #98a2b3; font-size: 11px; padding: 10px 0 20
   .account { max-width: 100%; justify-content: flex-start; }
   .form-actions button { flex: 1; }
 }
+
+.recipient-results-heading #downloadRecipientResults { margin: 16px 0 12px; white-space: nowrap; }
